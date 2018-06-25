@@ -1,24 +1,28 @@
 import os
 import pandas as pd
 import datetime
+
 import matplotlib.pyplot as plt
 import seaborn as sns
-sns.set(style='ticks')
 
 import string
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from nltk.stem import PorterStemmer
+from textblob import TextBlob
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import LinearSVC
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import cross_val_score
+from sklearn import model_selection
 
 pd.options.display.max_columns = 200
 
 DEBUG = False
 
 def tic():
-    t = datetime.datetime.now()
-    print()
-    print(t)
-    return t
+    return datetime.datetime.now()
 
 def toc(t):
     t2 = datetime.datetime.now() - t
@@ -30,7 +34,10 @@ def prep_data(df_applications, df_resources):
     df = df_applications.copy()
     res = df_resources.copy()
     
-    ## Process resources file first
+    
+    ###########################################################################
+    # PROCESS RESOURCES
+    
     # Convert numeric values to float
     res['quantity'] = pd.to_numeric(res['quantity'], errors='coerce')
     res['price'] = pd.to_numeric(res['price'], errors='coerce')
@@ -47,95 +54,114 @@ def prep_data(df_applications, df_resources):
     res['description'].fillna('', inplace=True)
     # Combine the text of individual descriptions into one large text blob for each application
     res_unique['res_descriptions'] = res.groupby(by='id')['description'].apply(', '.join)
+    
+    
+    ###########################################################################
+    # PROCESS APPLICATIONS
 
-    ## Application data
+    # Combine resources with applications 
+    df = pd.merge(df, res_unique[~res_unique.index.duplicated(keep='first')], how='left', on='id')
+    
+    # Convert numeric values to float
     df['teacher_number_of_previously_posted_projects'] = pd.to_numeric(df['teacher_number_of_previously_posted_projects'], errors='coerce')
 
-    ## Combine resources with applications 
-    df = pd.merge(df, res_unique[~res_unique.index.duplicated(keep='first')], how='left', on='id')
 
-    ## Feature engineering
-    # Split up subject categories into individual columns
-    df['subject_a'], df['subject_b'] = df['project_subject_categories'].str.split(',', 1).str
-    df['subject_c'], df['subject_d'] = df['project_subject_subcategories'].str.split(',', 1).str
+    ###########################################################################
+    # SPLIT DATA INTO TYPES
+    
+    # Split out categorical features, text, and labels
+    cat = df[['teacher_prefix',
+              'school_state',
+              'project_grade_category',
+              'project_subject_categories',
+              'project_subject_subcategories',
+              ]]
+    
+    num = df[['teacher_number_of_previously_posted_projects',
+              'project_submitted_datetime',
+              'res_count', 
+              'res_quantity', 
+              'res_median_price', 
+              'res_total_cost'
+              ]]
+    
+    txt = df[['project_title',
+              'project_essay_1',
+              'project_essay_2',
+              'project_essay_3',
+              'project_essay_4',
+              'project_resource_summary',
+              'res_descriptions'
+              ]]
+    
+    
+    ###########################################################################
+    # FEATURE ENGINEERING
+    
+    # Change column names for sanity
+    num.rename({'teacher_number_of_previously_posted_projects': 'num_previous'}, inplace=True, axis='columns')
+      
+    # Fill any NaNs with blank
+    txt.fillna('', inplace=True)  
+    
+    # Remove escaped characters from text
+    txt = txt.applymap(lambda s: s.replace('\\"', ' '))
+    txt = txt.applymap(lambda s: s.replace('\\r', ' '))
+    txt = txt.applymap(lambda s: s.replace('\\n', ' '))
+    txt = txt.applymap(lambda s: s.strip())
+
+    # Split up subject categories into individual columns (max 2 subjects per category)
+    cat['subject_a'], cat['subject_b'] = cat['project_subject_categories'].str.split(',', 1).str
+    cat['subject_c'], cat['subject_d'] = cat['project_subject_subcategories'].str.split(',', 1).str
 
     # Combine subject categories into single feature
     cols = ['subject_a', 'subject_b', 'subject_c', 'subject_d']
     for c in cols:
-        df[c].fillna('', inplace=True)
-        df[c] = df[c].apply(lambda s: s.strip())
-    df['subject_agg'] = df[cols].apply(' '.join, axis=1)
+        cat[c].fillna('', inplace=True)
+        cat[c] = cat[c].apply(lambda s: s.strip())
+    cat['subject_agg'] = cat[cols].apply(' '.join, axis=1)
 
-    cols = ['project_title', 'project_essay_1', 'project_essay_2', 'project_essay_3', 'project_essay_4']
-    # Remove escaped characters from text
-    for c in cols:
-        df[c].fillna('', inplace=True)
-        df[c] = df[c].apply(lambda s: s.replace('\\"', ' '))
-        df[c] = df[c].apply(lambda s: s.replace('\\r', ' '))
-        df[c] = df[c].apply(lambda s: s.replace('\\n', ' '))
-        df[c] = df[c].apply(lambda s: s.strip())
-        
+    # Deal with essay amount change from 4 to 2 by combining 1&2, 3&4 where appropriate
+    def new_essay_1(s):
+        if s['project_essay_3'] == '':
+            return s['project_essay_1']
+        else:
+            return s['project_essay_1'] + s['project_essay_2']
+    txt['essay_1'] = txt.apply(new_essay_1, axis=1)
+    
+    def new_essay_2(s):
+        if s['project_essay_3'] == '':
+            return s['project_essay_2']
+        else:
+            return s['project_essay_3'] + s['project_essay_4']
+    txt['essay_2'] = txt.apply(new_essay_2, axis=1)
+
+    txt.drop(columns=['project_essay_1', 'project_essay_2', 'project_essay_3', 'project_essay_4', ], inplace=True)
+    
     # Combine essays and project title into single feature
-    df['essay_agg'] = df[['project_title', 'project_essay_1', 'project_essay_2', 'project_essay_3', 'project_essay_4']].apply(' '.join, axis=1)
+    txt['essay_agg'] = txt[['project_title', 'essay_1', 'essay_2']].apply(' '.join, axis=1)
 
     # Split up datetime into columns
-    df['date_year'] = df['project_submitted_datetime'].dt.year
-    df['date_month'] = df['project_submitted_datetime'].dt.month
-    df['date_dow'] = df['project_submitted_datetime'].dt.dayofweek
-    df['date_doy'] = df['project_submitted_datetime'].dt.dayofyear
-    df['date_hour'] = df['project_submitted_datetime'].dt.hour
+    num['date_year'] = num['project_submitted_datetime'].dt.year
+    num['date_month'] = num['project_submitted_datetime'].dt.month
+    num['date_dow'] = num['project_submitted_datetime'].dt.dayofweek
+    num['date_doy'] = num['project_submitted_datetime'].dt.dayofyear
+    num['date_hour'] = num['project_submitted_datetime'].dt.hour
+    num.drop(columns=['project_submitted_datetime'], inplace=True)
     
-    # Get word counts of each text feature
-    cols = ['essay_agg', 'project_title', 'project_essay_1', 'project_essay_2', 'project_essay_3', 'project_essay_4', 'res_descriptions']
-    for c in cols:    
-        # Get word counts for each essay, etc.
-        df['word_count_' + c] = df[c].apply(lambda s: len(s.split()))
+    # Get word count of every text feature
+    word_count = txt.applymap(lambda s: len(s.split()))
+    word_count = word_count.add_suffix('_word_count')
+    num = pd.merge(num, word_count, left_index=True, right_index=True)
+                    
+    # Get polarity and subjectivity of essays
+    polarity = txt.applymap(lambda x: TextBlob(x).sentiment.polarity)
+    polarity = polarity.add_suffix('_polarity')
+    subjectivity = txt.applymap(lambda x: TextBlob(x).sentiment.subjectivity)
+    subjectivity = subjectivity.add_suffix('_subjectivity')
+    num = pd.merge(num, polarity, left_index=True, right_index=True)
+    num = pd.merge(num, subjectivity, left_index=True, right_index=True)
     
-    # Change column names for sanity
-    df.rename({'teacher_number_of_previously_posted_projects': 'num_previous'}, inplace=True, axis='columns')
-    
-    # Set unique application ID as index
-    df.set_index('id', inplace=True) 
-    
-    # Split out categorical features, text, and labels
-    text = df[['project_title',
-               'project_essay_1',
-               'project_essay_2',
-               'project_essay_3',
-               'project_essay_4',
-               'project_resource_summary',
-               'essay_agg',
-               'subject_agg',
-               'res_descriptions'
-             ]]
-    categorical = df[['teacher_prefix',
-                      'school_state',
-                      'project_grade_category',
-                      'subject_a',
-                      'subject_b',
-                      'subject_c',
-                      'subject_d'
-                    ]]
-    numerical = df[['res_count', 
-                    'res_quantity',
-                    'res_median_price',
-                    'res_total_cost',
-                    'word_count_essay_agg', 
-                    'word_count_project_title', 
-                    'word_count_project_essay_1', 
-                    'word_count_project_essay_2', 
-                    'word_count_project_essay_3', 
-                    'word_count_project_essay_4',
-                    'num_previous'
-                  ]]
-
-    print('Converting categorical data to one-hot...')
-    cat_one_hot = pd.get_dummies(categorical, drop_first=True)
-    # Data to use for training/evaluating models
-    df_model = pd.merge(cat_one_hot, numerical[~numerical.index.duplicated(keep='first')], how='left', left_index=True, right_index=True)
-    df_text = text
-    
-    print('Normalizing text...')
     # Text normalization    
     stop_words = stopwords.words('english') + list(string.punctuation)
     stm = PorterStemmer()
@@ -143,21 +169,28 @@ def prep_data(df_applications, df_resources):
         tokens = [stm.stem(t.lower()) for t in word_tokenize(s) if t not in stop_words]
         normalized = ' '.join(tokens)
         return normalized
-    df_text['essay_agg'] = df_text['essay_agg'].apply(normalize_text)
+    txt_norm = txt.applymap(normalize_text)
+    txt_norm = txt_norm.add_suffix('_norm')
+    txt = pd.merge(txt, txt_norm, left_index=True, right_index=True)
+    
+    print('Preprocessing complete.')
 
-    print('Preprocessing data complete.')
-
-    return df_model, df_text
+    return cat, num, txt
 
 
-# Set up directories
+###############################################################################
+# SETUP
+
 data_dir = 'data'
 output_dir = 'output'
 if not os.path.isdir(output_dir):
     os.mkdir(output_dir)
 
-# Read in all available data
-print('Reading in data files...')
+
+###############################################################################
+# READ IN DATA
+    
+print('## Read in Data ##')
 t = tic()
 res = pd.read_csv(os.path.join(data_dir, 'resources.csv'), dtype='str')
 train = pd.read_csv(os.path.join(data_dir, 'train.csv'), parse_dates=[4], dtype='str')
@@ -166,95 +199,146 @@ toc(t)
 
 if DEBUG:
     print('DEBUG = True')
-    train = train.loc[:1000,:]
-    test = test.loc[:1000,:]
+    train = train.head(100)
+    test = test.head(100)
 
+
+###############################################################################
+# PREPROCESS DATA
+    
+print('## Preprocess Data ##')
 labels = train['project_is_approved'].astype('int')
 train.drop(columns=['project_is_approved'])
 
-print('Preprocess train')
+print('Preprocess training data...')
 t = tic()
-df_train, df_train_text = prep_data(train, res)
+cat_train, num_train, txt_train = prep_data(train, res)
 toc(t)
 
-print('Preprocess test')
+print('Preprocessing testing data...')
 t = tic()
-df_test, df_test_text = prep_data(test, res)
+cat_test, num_test, txt_test = prep_data(test, res)
 toc(t)
 
-# Make the columns line up
-cols = list(set(list(df_train.columns)) & set(list(df_test.columns)))
-df_train = df_train[cols]
-df_test = df_test[cols]
+# Compute correlation
+agg = num_train.copy()
+agg['labels'] = labels
+corr = agg.corr()
+sns.heatmap(corr, xticklabels=corr.columns, yticklabels=corr.columns)
+
+# Filter in/out features we care about
+cols = ['num_previous', 
+        'res_count',
+        'res_median_price', 
+        'res_descriptions_word_count', 
+        'project_resource_summary_subjectivity', 
+        'essay_2_subjectivity',
+        'essay_1_norm',
+        'essay_2_norm',
+        'essay_agg_norm',
+        'res_descriptions_norm',
+        'project_resource_summary_norm']
+def select_columns(cat, num, txt, cols):
+    cat = cat[[c for c in cat if c in cols]]
+    num = num[[c for c in num if c in cols]]
+    txt = txt[[c for c in txt if c in cols]]
+select_columns(cat_test, num_test, txt_test, cols)
+select_columns(cat_train, num_train, txt_train, cols)
+
+# Convert categorical variables to one-hot
+cat_train_hot = pd.get_dummies(cat_train, drop_first=True)
+cat_test_hot = pd.get_dummies(cat_test, drop_first=True)
+
+# Merge data into model ready dataframes
+#num_train = pd.merge(num_train, cat_train_hot, left_index=True, right_index=True)
+#num_test = pd.merge(num_test, cat_test_hot, left_index=True, right_index=True)
+
+# Ensure that columns match in both train and test data
+cols = list(set(list(num_train.columns)) & set(list(num_test.columns)))
+num_train = num_train[cols]
+num_test = num_test[cols]
 
 
+###############################################################################
+# CROSS VALIDATION
+score = {}
 
-from sklearn.ensemble import RandomForestClassifier
+print('## Cross validation ##')
+kfold = model_selection.KFold(n_splits=5, random_state=1138)
 
-from sklearn.svm import LinearSVC
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.model_selection import cross_val_score
-from sklearn import model_selection
+t = tic()
+clf = RandomForestClassifier(max_depth=7, n_estimators=11)
+score['RF Num'] = cross_val_score(clf, num_train, labels, cv=kfold, n_jobs=-1)
+out = score['RF Num']
+print('{} ACC: {:0.3f}%  STD: {:0.3f}%'.format('Random Forest', out.mean()*100.0, out.std()*100.0))
+toc(t)
 
-print('* Random Forest with Categorical/Numerical Features')
+for col in txt_train:
+    t = tic()
+    clf = LinearSVC()
+    vct = TfidfVectorizer(ngram_range=(1,2), min_df=3)
+    x_train = vct.fit_transform(txt_train[col])
+    score[col] = cross_val_score(clf, x_train, labels, cv=kfold, n_jobs=-1)
+    out = score[col]
+    print(col)
+    print('{} ACC: {:0.3f}%  STD: {:0.3f}%'.format('SVM TF-IDF', out.mean()*100.0, out.std()*100.0))
+    toc(t)
+
+
+###############################################################################
+# PREDICT
+predictions = {}
+
+# Random Forest on the categorical features
+print('## Random Forest ##')
 clf = RandomForestClassifier(max_depth=7, n_estimators=11)
 
-print('Cross validation...')
 t = tic()
-kfold = model_selection.KFold(n_splits=5, random_state=1138)
-score = cross_val_score(clf, df_train, labels, cv=kfold, n_jobs=-1)
-print('{} ACC: {:0.3f}%  STD: {:0.3f}%'.format('Random Forest', score.mean()*100.0, score.std()*100.0))
+print('Fitting...')
+clf.fit(num_train, labels)
+print('Predicting...')
+predictions['RF Num'] = clf.predict(num_test)
 toc(t)
 
-print('Fit and predict labels...')
-t = tic()
-# Predict based on categorical/numerical values
-clf.fit(df_train, labels)
-p_random_forest = clf.predict(df_test)
-toc(t)
-
-
-
-# http://www.developintelligence.com/blog/2017/06/practical-neural-networks-keras-classifying-yelp-reviews/
-## Support Vector Machine and TF-IDF
-print('* Support Vector Machine on TF-IDF features')
-clf = LinearSVC()
-
-print('Fit transform...')
-t = tic()
-vct = TfidfVectorizer(ngram_range=(1,2), min_df=3)
-x_train = vct.fit_transform(df_train_text['essay_agg'])
-toc(t)
-
-print('Cross validation...')
-t = tic()
-kfold = model_selection.KFold(n_splits=5, random_state=1138)
-score = cross_val_score(clf, x_train, labels, cv=kfold, n_jobs=-1)
-print('{} ACC: {:0.3f}%  STD: {:0.3f}%'.format('SVM TF-IDF', score.mean()*100.0, score.std()*100.0))
-toc(t)
-
-print('Fit and predict labels...')
-t = tic()
-clf.fit(x_train, labels)
-x_test = vct.transform(df_test_text['essay_agg'])
-p_svm = clf.predict(x_test)
-toc(t)
-
-# Vote by and-ing the predictions
-predictions= []
-for idx, val in enumerate(zip(p_svm, p_random_forest)):
-    if val[0] & val[1]:
-        predictions.append(1)
-    else:
-        predictions.append(0)
+# Support Vector Machine and TF-IDF
+print('## Support Vector Machine ##')
+for col in txt_train:
+    clf = LinearSVC()
+    print(col)
+    print('Fitting transform...')
+    vct = TfidfVectorizer(ngram_range=(1,2), min_df=3)
+    x_train = vct.fit_transform(txt_train[col])
+    
+    t = tic()
+    print('Fitting...')
+    clf.fit(x_train, labels)
+    x_test = vct.transform(txt_test[col])
+    print('Predicting...')
+    predictions[col] = clf.predict(x_test)
+    toc(t)
+#
+## Vote by and-ing the predictions
+#predictions= []
+#for idx, val in enumerate(zip(p_svm, p_random_forest)):
+#    if val[0] & val[1]:
+#        predictions.append(1)
+#    else:
+#        predictions.append(0)
+# 
+#    
+################################################################################
+## OUTPUT
+#        
+#with open('predictions.csv', 'w+') as f:
+#    f.write('{},{}\n'.format('id', 'project_is_approved'))
+#    for p_id, p in zip(num_test.index, predictions):
+#        f.write('{},{}\n'.format(p_id, p))
+#        
+#        
         
-with open('predictions.csv', 'w+') as f:
-    f.write('{},{}\n'.format('id', 'project_is_approved'))
-    for p_id, p in zip(df_test.index, predictions):
-        f.write('{},{}\n'.format(p_id, p))
-        
-        
-        
+    
+    
+    
 # ## Categorical prediction (cross validation testing)
 #
 #from sklearn import model_selection
