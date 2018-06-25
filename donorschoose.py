@@ -18,6 +18,7 @@ from sklearn.model_selection import cross_val_score
 from sklearn import model_selection
 
 pd.options.display.max_columns = 200
+pd.options.mode.chained_assignment = None  # 'warn'
 
 DEBUG = False
 
@@ -37,7 +38,7 @@ def prep_data(df_applications, df_resources):
     
     ###########################################################################
     # PROCESS RESOURCES
-    
+    print('  Summarizing resources')
     # Convert numeric values to float
     res['quantity'] = pd.to_numeric(res['quantity'], errors='coerce')
     res['price'] = pd.to_numeric(res['price'], errors='coerce')
@@ -100,17 +101,19 @@ def prep_data(df_applications, df_resources):
     
     # Change column names for sanity
     num.rename({'teacher_number_of_previously_posted_projects': 'num_previous'}, inplace=True, axis='columns')
-      
+     
     # Fill any NaNs with blank
     txt.fillna('', inplace=True)  
     
     # Remove escaped characters from text
+    print('  Removing escape characters from text')
     txt = txt.applymap(lambda s: s.replace('\\"', ' '))
     txt = txt.applymap(lambda s: s.replace('\\r', ' '))
     txt = txt.applymap(lambda s: s.replace('\\n', ' '))
     txt = txt.applymap(lambda s: s.strip())
 
     # Split up subject categories into individual columns (max 2 subjects per category)
+    print('  Splitting subjects')
     cat['subject_a'], cat['subject_b'] = cat['project_subject_categories'].str.split(',', 1).str
     cat['subject_c'], cat['subject_d'] = cat['project_subject_subcategories'].str.split(',', 1).str
 
@@ -122,6 +125,7 @@ def prep_data(df_applications, df_resources):
     cat['subject_agg'] = cat[cols].apply(' '.join, axis=1)
 
     # Deal with essay amount change from 4 to 2 by combining 1&2, 3&4 where appropriate
+    print('  Combining essays')
     def new_essay_1(s):
         if s['project_essay_3'] == '':
             return s['project_essay_1']
@@ -142,6 +146,7 @@ def prep_data(df_applications, df_resources):
     txt['essay_agg'] = txt[['project_title', 'essay_1', 'essay_2']].apply(' '.join, axis=1)
 
     # Split up datetime into columns
+    print('  Parsing dates')
     num['date_year'] = num['project_submitted_datetime'].dt.year
     num['date_month'] = num['project_submitted_datetime'].dt.month
     num['date_dow'] = num['project_submitted_datetime'].dt.dayofweek
@@ -150,19 +155,23 @@ def prep_data(df_applications, df_resources):
     num.drop(columns=['project_submitted_datetime'], inplace=True)
     
     # Get word count of every text feature
+    print('  Counting words')
     word_count = txt.applymap(lambda s: len(s.split()))
     word_count = word_count.add_suffix('_word_count')
     num = pd.merge(num, word_count, left_index=True, right_index=True)
                     
     # Get polarity and subjectivity of essays
-    polarity = txt.applymap(lambda x: TextBlob(x).sentiment.polarity)
-    polarity = polarity.add_suffix('_polarity')
+#    print('  Getting polarity')
+#    polarity = txt.applymap(lambda x: TextBlob(x).sentiment.polarity)
+#    polarity = polarity.add_suffix('_polarity')
+    print('  Getting subjectivity')
     subjectivity = txt.applymap(lambda x: TextBlob(x).sentiment.subjectivity)
     subjectivity = subjectivity.add_suffix('_subjectivity')
-    num = pd.merge(num, polarity, left_index=True, right_index=True)
+#    num = pd.merge(num, polarity, left_index=True, right_index=True)
     num = pd.merge(num, subjectivity, left_index=True, right_index=True)
     
-    # Text normalization    
+    # Text normalization
+    print('  Normalizing all text')
     stop_words = stopwords.words('english') + list(string.punctuation)
     stm = PorterStemmer()
     def normalize_text(s):
@@ -199,8 +208,8 @@ toc(t)
 
 if DEBUG:
     print('DEBUG = True')
-    train = train.head(100)
-    test = test.head(100)
+    train = train.head(10000)
+    test = test.head(10000)
 
 
 ###############################################################################
@@ -210,12 +219,12 @@ print('## Preprocess Data ##')
 labels = train['project_is_approved'].astype('int')
 train.drop(columns=['project_is_approved'])
 
-print('Preprocess training data...')
+print('Training data')
 t = tic()
 cat_train, num_train, txt_train = prep_data(train, res)
 toc(t)
 
-print('Preprocessing testing data...')
+print('Testing data')
 t = tic()
 cat_test, num_test, txt_test = prep_data(test, res)
 toc(t)
@@ -316,7 +325,10 @@ for col in txt_train:
     print('Predicting...')
     predictions[col] = clf.predict(x_test)
     toc(t)
-#
+
+
+##FIXME Use probabilities as output!
+    
 ## Vote by and-ing the predictions
 #predictions= []
 #for idx, val in enumerate(zip(p_svm, p_random_forest)):
