@@ -171,6 +171,7 @@ def prep_data(df_applications, df_resources):
     num = pd.merge(num, subjectivity, left_index=True, right_index=True)
     
     # Text normalization
+    # FIXME Can this be sped up? Or done selectively?
     print('  Normalizing all text')
     stop_words = stopwords.words('english') + list(string.punctuation)
     stm = PorterStemmer()
@@ -201,9 +202,14 @@ if not os.path.isdir(output_dir):
     
 print('## Read in Data ##')
 t = tic()
-res = pd.read_csv(os.path.join(data_dir, 'resources.csv'), dtype='str')
-train = pd.read_csv(os.path.join(data_dir, 'train.csv'), parse_dates=[4], dtype='str')
-test = pd.read_csv(os.path.join(data_dir, 'test.csv'), parse_dates=[4], dtype='str')
+try: res
+except: res = pd.read_csv(os.path.join(data_dir, 'resources.csv'), dtype='str')
+
+try: train
+except: train = pd.read_csv(os.path.join(data_dir, 'train.csv'), parse_dates=[4], dtype='str')
+
+try: test
+except: test = pd.read_csv(os.path.join(data_dir, 'test.csv'), parse_dates=[4], dtype='str')
 toc(t)
 
 if DEBUG:
@@ -219,16 +225,45 @@ print('## Preprocess Data ##')
 labels = train['project_is_approved'].astype('int')
 train.drop(columns=['project_is_approved'])
 
-print('Training data')
-t = tic()
-cat_train, num_train, txt_train = prep_data(train, res)
-toc(t)
-
-print('Testing data')
-t = tic()
-cat_test, num_test, txt_test = prep_data(test, res)
-toc(t)
-
+if not (os.path.isfile(os.path.join(output_dir, 'cat_train')) & os.path.isfile(os.path.join(output_dir, 'num_train')) & os.path.isfile(os.path.join(output_dir, 'txt_train'))):
+    print('Training data')
+    t = tic()
+    cat_train, num_train, txt_train = prep_data(train, res)
+    # Save files to pickles
+    cat_train.to_pickle(os.path.join(output_dir, 'cat_train'))
+    num_train.to_pickle(os.path.join(output_dir, 'num_train'))
+    txt_train.to_pickle(os.path.join(output_dir, 'txt_train'))
+    toc(t)
+else:
+    try: cat_train
+    except: cat_train.read_pickle(os.path.join(output_dir, 'cat_train'))
+    
+    try: num_train
+    except: num_train.read_pickle(os.path.join(output_dir, 'num_train'))
+    
+    try: txt_train
+    except: txt_train.read_pickle(os.path.join(output_dir, 'txt_train'))
+    
+if not (os.path.isfile(os.path.join(output_dir, 'cat_test')) & os.path.isfile(os.path.join(output_dir, 'num_test')) & os.path.isfile(os.path.join(output_dir, 'txt_test'))):    
+    print('Testing data')
+    t = tic()
+    cat_test, num_test, txt_test = prep_data(test, res)
+    # Save files to pickles
+    cat_test.to_pickle(os.path.join(output_dir, 'cat_test'))
+    num_test.to_pickle(os.path.join(output_dir, 'num_test'))
+    txt_test.to_pickle(os.path.join(output_dir, 'txt_test'))
+    toc(t)
+else:
+    try: cat_test
+    except: cat_test.read_pickle(os.path.join(output_dir, 'cat_test'))
+    
+    try: num_test
+    except: num_test.read_pickle(os.path.join(output_dir, 'num_test'))
+    
+    try: txt_test
+    except: txt_test.read_pickle(os.path.join(output_dir, 'txt_test'))
+    
+    
 # Compute correlation
 agg = num_train.copy()
 agg['labels'] = labels
