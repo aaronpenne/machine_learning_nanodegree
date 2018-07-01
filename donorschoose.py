@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+import numpy as np
 import datetime
 
 import matplotlib.pyplot as plt
@@ -12,9 +13,11 @@ from nltk.stem import PorterStemmer
 from textblob import TextBlob
 
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.svm import LinearSVC
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import cross_val_score, cross_val_predict
+from sklearn.metrics import confusion_matrix
 from sklearn import model_selection
 
 pd.options.display.max_columns = 200
@@ -34,8 +37,8 @@ def prep_data(df_applications, df_resources):
     print('Preprocessing data...')
     df = df_applications.copy()
     res = df_resources.copy()
-    
-    
+
+
     ###########################################################################
     # PROCESS RESOURCES
     print('  Summarizing resources')
@@ -55,21 +58,21 @@ def prep_data(df_applications, df_resources):
     res['description'].fillna('', inplace=True)
     # Combine the text of individual descriptions into one large text blob for each application
     res_unique['res_descriptions'] = res.groupby(by='id')['description'].apply(', '.join)
-    
-    
+
+
     ###########################################################################
     # PROCESS APPLICATIONS
 
-    # Combine resources with applications 
+    # Combine resources with applications
     df = pd.merge(df, res_unique[~res_unique.index.duplicated(keep='first')], how='left', on='id')
-    
+
     # Convert numeric values to float
     df['teacher_number_of_previously_posted_projects'] = pd.to_numeric(df['teacher_number_of_previously_posted_projects'], errors='coerce')
 
 
     ###########################################################################
     # SPLIT DATA INTO TYPES
-    
+
     # Split out categorical features, text, and labels
     cat = df[['teacher_prefix',
               'school_state',
@@ -77,15 +80,15 @@ def prep_data(df_applications, df_resources):
               'project_subject_categories',
               'project_subject_subcategories',
               ]]
-    
+
     num = df[['teacher_number_of_previously_posted_projects',
               'project_submitted_datetime',
-              'res_count', 
-              'res_quantity', 
-              'res_median_price', 
+              'res_count',
+              'res_quantity',
+              'res_median_price',
               'res_total_cost'
               ]]
-    
+
     txt = df[['project_title',
               'project_essay_1',
               'project_essay_2',
@@ -94,17 +97,17 @@ def prep_data(df_applications, df_resources):
               'project_resource_summary',
               'res_descriptions'
               ]]
-    
-    
+
+
     ###########################################################################
     # FEATURE ENGINEERING
-    
+
     # Change column names for sanity
     num.rename({'teacher_number_of_previously_posted_projects': 'num_previous'}, inplace=True, axis='columns')
-     
+
     # Fill any NaNs with blank
-    txt.fillna('', inplace=True)  
-    
+    txt.fillna('', inplace=True)
+
     # Remove escaped characters from text
     print('  Removing escape characters from text')
     txt = txt.applymap(lambda s: s.replace('\\"', ' '))
@@ -132,7 +135,7 @@ def prep_data(df_applications, df_resources):
         else:
             return s['project_essay_1'] + s['project_essay_2']
     txt['essay_1'] = txt.apply(new_essay_1, axis=1)
-    
+
     def new_essay_2(s):
         if s['project_essay_3'] == '':
             return s['project_essay_2']
@@ -141,7 +144,7 @@ def prep_data(df_applications, df_resources):
     txt['essay_2'] = txt.apply(new_essay_2, axis=1)
 
     txt.drop(columns=['project_essay_1', 'project_essay_2', 'project_essay_3', 'project_essay_4', ], inplace=True)
-    
+
     # Combine essays and project title into single feature
     txt['essay_agg'] = txt[['project_title', 'essay_1', 'essay_2']].apply(' '.join, axis=1)
 
@@ -153,13 +156,13 @@ def prep_data(df_applications, df_resources):
     num['date_doy'] = num['project_submitted_datetime'].dt.dayofyear
     num['date_hour'] = num['project_submitted_datetime'].dt.hour
     num.drop(columns=['project_submitted_datetime'], inplace=True)
-    
+
     # Get word count of every text feature
     print('  Counting words')
     word_count = txt.applymap(lambda s: len(s.split()))
     word_count = word_count.add_suffix('_word_count')
     num = pd.merge(num, word_count, left_index=True, right_index=True)
-                    
+
     # Get polarity and subjectivity of essays
 #    print('  Getting polarity')
 #    polarity = txt.applymap(lambda x: TextBlob(x).sentiment.polarity)
@@ -169,7 +172,7 @@ def prep_data(df_applications, df_resources):
     subjectivity = subjectivity.add_suffix('_subjectivity')
 #    num = pd.merge(num, polarity, left_index=True, right_index=True)
     num = pd.merge(num, subjectivity, left_index=True, right_index=True)
-    
+
     # Text normalization
     # FIXME Can this be sped up? Or done selectively?
     print('  Normalizing all text')
@@ -182,7 +185,7 @@ def prep_data(df_applications, df_resources):
     txt_norm = txt.applymap(normalize_text)
     txt_norm = txt_norm.add_suffix('_norm')
     txt = pd.merge(txt, txt_norm, left_index=True, right_index=True)
-    
+
     print('Preprocessing complete.')
 
     return cat, num, txt
@@ -199,7 +202,7 @@ if not os.path.isdir(output_dir):
 
 ###############################################################################
 # READ IN DATA
-    
+
 print('## Read in Data ##')
 t = tic()
 try: res
@@ -220,7 +223,7 @@ if DEBUG:
 
 ###############################################################################
 # PREPROCESS DATA
-    
+
 print('## Preprocess Data ##')
 labels = train['project_is_approved'].astype('int')
 train.drop(columns=['project_is_approved'])
@@ -236,15 +239,15 @@ if not (os.path.isfile(os.path.join(output_dir, 'cat_train')) & os.path.isfile(o
     toc(t)
 else:
     try: cat_train
-    except: cat_train.read_pickle(os.path.join(output_dir, 'cat_train'))
-    
+    except: cat_train = pd.read_pickle(os.path.join(output_dir, 'cat_train'))
+
     try: num_train
-    except: num_train.read_pickle(os.path.join(output_dir, 'num_train'))
-    
+    except: num_train = pd.read_pickle(os.path.join(output_dir, 'num_train'))
+
     try: txt_train
-    except: txt_train.read_pickle(os.path.join(output_dir, 'txt_train'))
-    
-if not (os.path.isfile(os.path.join(output_dir, 'cat_test')) & os.path.isfile(os.path.join(output_dir, 'num_test')) & os.path.isfile(os.path.join(output_dir, 'txt_test'))):    
+    except: txt_train = pd.read_pickle(os.path.join(output_dir, 'txt_train'))
+
+if not (os.path.isfile(os.path.join(output_dir, 'cat_test')) & os.path.isfile(os.path.join(output_dir, 'num_test')) & os.path.isfile(os.path.join(output_dir, 'txt_test'))):
     print('Testing data')
     t = tic()
     cat_test, num_test, txt_test = prep_data(test, res)
@@ -255,15 +258,15 @@ if not (os.path.isfile(os.path.join(output_dir, 'cat_test')) & os.path.isfile(os
     toc(t)
 else:
     try: cat_test
-    except: cat_test.read_pickle(os.path.join(output_dir, 'cat_test'))
-    
+    except: cat_test = pd.read_pickle(os.path.join(output_dir, 'cat_test'))
+
     try: num_test
-    except: num_test.read_pickle(os.path.join(output_dir, 'num_test'))
-    
+    except: num_test = pd.read_pickle(os.path.join(output_dir, 'num_test'))
+
     try: txt_test
-    except: txt_test.read_pickle(os.path.join(output_dir, 'txt_test'))
-    
-    
+    except: txt_test = pd.read_pickle(os.path.join(output_dir, 'txt_test'))
+
+
 # Compute correlation
 agg = num_train.copy()
 agg['labels'] = labels
@@ -271,11 +274,11 @@ corr = agg.corr()
 sns.heatmap(corr, xticklabels=corr.columns, yticklabels=corr.columns)
 
 # Filter in/out features we care about
-cols = ['num_previous', 
+cols = ['num_previous',
         'res_count',
-        'res_median_price', 
-        'res_descriptions_word_count', 
-        'project_resource_summary_subjectivity', 
+        'res_median_price',
+        'res_descriptions_word_count',
+        'project_resource_summary_subjectivity',
         'essay_2_subjectivity',
         'essay_1_norm',
         'essay_2_norm',
@@ -286,12 +289,13 @@ def select_columns(cat, num, txt, cols):
     cat = cat[[c for c in cat if c in cols]]
     num = num[[c for c in num if c in cols]]
     txt = txt[[c for c in txt if c in cols]]
-select_columns(cat_test, num_test, txt_test, cols)
-select_columns(cat_train, num_train, txt_train, cols)
+    return cat, num, txt
+cat_test, num_test, txt_test = select_columns(cat_test, num_test, txt_test, cols)
+cat_train, num_train, txt_train = select_columns(cat_train, num_train, txt_train, cols)
 
 # Convert categorical variables to one-hot
-cat_train_hot = pd.get_dummies(cat_train, drop_first=True)
-cat_test_hot = pd.get_dummies(cat_test, drop_first=True)
+#cat_train_hot = pd.get_dummies(cat_train, drop_first=True)
+#cat_test_hot = pd.get_dummies(cat_test, drop_first=True)
 
 # Merge data into model ready dataframes
 #num_train = pd.merge(num_train, cat_train_hot, left_index=True, right_index=True)
@@ -308,11 +312,20 @@ num_test = num_test[cols]
 score = {}
 
 print('## Cross validation ##')
+
+
+
 kfold = model_selection.KFold(n_splits=5, random_state=1138)
 
 t = tic()
-clf = RandomForestClassifier(max_depth=7, n_estimators=11)
-score['RF Num'] = cross_val_score(clf, num_train, labels, cv=kfold, n_jobs=-1)
+clf = RandomForestClassifier(max_depth=15, n_estimators=11, random_state=1138)
+score['RF Num F1'] = cross_val_score(clf, num_train, labels, cv=kfold, scoring='f1')
+score['RF Num neg log loss'] = cross_val_score(clf, num_train, labels, cv=kfold, scoring='neg_log_loss')
+score['RF Num ROC AUC'] = cross_val_score(clf, num_train, labels, cv=kfold, scoring='roc_auc')
+y_hat = cross_val_predict(clf, num_train, labels, cv=kfold)
+confusion = confusion_matrix(labels, y_hat)
+tn, fp, fn, tp = confusion_matrix(labels, y_hat).ravel()
+(tn, fp, fn, tp)
 out = score['RF Num']
 print('{} ACC: {:0.3f}%  STD: {:0.3f}%'.format('Random Forest', out.mean()*100.0, out.std()*100.0))
 toc(t)
@@ -322,7 +335,7 @@ for col in txt_train:
     clf = LinearSVC()
     vct = TfidfVectorizer(ngram_range=(1,2), min_df=3)
     x_train = vct.fit_transform(txt_train[col])
-    score[col] = cross_val_score(clf, x_train, labels, cv=kfold, n_jobs=-1)
+    score[col] = cross_val_score(clf, x_train, labels, cv=kfold, scoring='f1')
     out = score[col]
     print(col)
     print('{} ACC: {:0.3f}%  STD: {:0.3f}%'.format('SVM TF-IDF', out.mean()*100.0, out.std()*100.0))
@@ -332,6 +345,7 @@ for col in txt_train:
 ###############################################################################
 # PREDICT
 predictions = {}
+prob = {}
 
 # Random Forest on the categorical features
 print('## Random Forest ##')
@@ -342,6 +356,7 @@ print('Fitting...')
 clf.fit(num_train, labels)
 print('Predicting...')
 predictions['RF Num'] = clf.predict(num_test)
+prob['RF Num'] = clf.predict_proba(num_test)
 toc(t)
 
 # Support Vector Machine and TF-IDF
@@ -352,7 +367,7 @@ for col in txt_train:
     print('Fitting transform...')
     vct = TfidfVectorizer(ngram_range=(1,2), min_df=3)
     x_train = vct.fit_transform(txt_train[col])
-    
+
     t = tic()
     print('Fitting...')
     clf.fit(x_train, labels)
@@ -361,31 +376,56 @@ for col in txt_train:
     predictions[col] = clf.predict(x_test)
     toc(t)
 
+# Probability testing
+col = 'essay_1_norm'
+clf = CalibratedClassifierCV(LinearSVC())
+print(col)
+print('Fitting transform...')
+vct = TfidfVectorizer(ngram_range=(1,2), min_df=3)
+x_train = vct.fit_transform(txt_train[col])
+t = tic()
+print('Fitting...')
+clf.fit(x_train, labels)
+x_test = vct.transform(txt_test[col])
+print('Predicting...')
+predictions[col] = clf.predict(x_test)
+prob[col] = clf.predict_proba(x_test)
+toc(t)
 
-##FIXME Use probabilities as output!
-    
-## Vote by and-ing the predictions
-#predictions= []
-#for idx, val in enumerate(zip(p_svm, p_random_forest)):
-#    if val[0] & val[1]:
-#        predictions.append(1)
-#    else:
-#        predictions.append(0)
-# 
-#    
-################################################################################
-## OUTPUT
-#        
-#with open('predictions.csv', 'w+') as f:
-#    f.write('{},{}\n'.format('id', 'project_is_approved'))
-#    for p_id, p in zip(num_test.index, predictions):
-#        f.write('{},{}\n'.format(p_id, p))
-#        
-#        
-        
-    
-    
-    
+col = 'essay_2_norm'
+clf = CalibratedClassifierCV(LinearSVC())
+print(col)
+print('Fitting transform...')
+vct = TfidfVectorizer(ngram_range=(1,2), min_df=3)
+x_train = vct.fit_transform(txt_train[col])
+t = tic()
+print('Fitting...')
+clf.fit(x_train, labels)
+x_test = vct.transform(txt_test[col])
+print('Predicting...')
+predictions[col] = clf.predict(x_test)
+prob[col] = clf.predict_proba(x_test)
+toc(t)
+
+
+###############################################################################
+# OUTPUT
+
+
+# Vote by averaging probabilities
+probabilities = [prob['RF Num'], prob['essay_1_norm'], prob['essay_2_norm']]
+avg_prob = np.mean(np.array(probabilities), axis=0)
+prob_approve = [x[1] for x in avg_prob]
+with open('prob.csv', 'w+') as f:
+    f.write('{},{}\n'.format('id', 'project_is_approved'))
+    for p_id, p in zip(test['id'], prob_approve):
+        f.write('{},{}\n'.format(p_id, p))
+
+
+
+
+
+
 # ## Categorical prediction (cross validation testing)
 #
 #from sklearn import model_selection
@@ -429,9 +469,9 @@ for col in txt_train:
 #
 #if TRAIN:
 #    labels_series = labels['project_is_approved']
-#    
+#
 #    kfold = model_selection.KFold(n_splits=5, random_state=1138)
-#    
+#
 #    for name, clf in zip(names, classifiers):
 #        out = model_selection.cross_val_score(clf, df_model, labels_series, cv=kfold)
 #        print('{} ACC: {:0.3f}%  STD: {:0.3f}%'.format(name, out.mean()*100.0, out.std()*100.0))
@@ -450,12 +490,12 @@ for col in txt_train:
 #    Decision Tree ACC: 84.765%  STD: 0.129%
 #    Random Forest ACC: 84.768%  STD: 0.131%
 #    Neural Net ACC: 84.249%  STD: 0.823%
-#    
+#
 #Results from preprocessed data (without subjects or dates):
 #    Decision Tree ACC: 84.767%  STD: 0.130%
 #    Random Forest ACC: 84.768%  STD: 0.131%
 #    Neural Net ACC: 82.698%  STD: 3.170%
-#    
+#
 #Results from only columns that had correlation > ||0.15||
 #['school_state', 'project_grade_category', 'res_quantity', 'word_count_project_title', 'date_year']
 #    Decision Tree ACC: 87.273%  STD: 8.509%
@@ -476,10 +516,10 @@ for col in txt_train:
 #out = model_selection.cross_val_score(clf, vct_train, labels, cv=kfold)
 #print('ACC: {:0.3f}%  STD: {:0.3f}%'.format(out.mean()*100.0, out.std()*100.0))Results for aggregated essays (with escaped chars removed, but not normalized at all):
 ##    ACC: 84.822%  STD: 0.133%
-##    
+##
 ##Results for aggregated essays (with escaped chars removed, but not normalized at all):
 ##    ACC: 84.854%  STD: 0.119%
-#    
+#
 ## ## Predict output with test data #FIXME Functionalize everything so it can be done on train and test
 #clf = RandomForestClassifier(max_depth=5, n_estimators=10)
 #clf.fit(rf_train, labels)
@@ -548,4 +588,3 @@ for col in txt_train:
 #
 #xtrain_vector = np.array([sent2vec(sent) for sent in xtrain])
 #xtrain_vector[10]
-
