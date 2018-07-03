@@ -423,6 +423,7 @@ def balance(df, labels):
 
 num_train_imbal, num_train_dn, num_train_up = balance(num_train, labels)
 txt_train_imbal, txt_train_dn, txt_train_up = balance(txt_train, labels)
+
 # Pair plot
 #def pair_heat(x, y, **kws):
 #    cmap = sns.light_palette(kws.pop("color"), as_cmap=True)
@@ -450,9 +451,9 @@ classifiers = [#('Dummy Classifier Baseline', DummyClassifier(random_state=rando
 #               ('Linear SVM', LinearSVC(random_state=random_state)),
                ('Naive Bayes', GaussianNB())]
 
-datasets = [('Imbalanced Dataset', df_imbal),
-            ('Majority Downsampled', df_bal_dn),
-            ('Minority Upsampled', df_bal_up)]
+datasets = [('Imbalanced Dataset', num_train_imbal),
+            ('Majority Downsampled', num_train_dn),
+            ('Minority Upsampled', num_train_up)]
 
 kfold = model_selection.RepeatedStratifiedKFold(n_splits=5, n_repeats=2, random_state=random_state)
     
@@ -514,17 +515,17 @@ prob = {}
 predictions = {}
 prob = {}
 
-
-# Random Forest on the categorical features
-print('## Random Forest ##')
-clf = RandomForestClassifier(max_depth=7, n_estimators=11, random_state=random_state)
-t = tic()
-print('Fitting...')
-clf.fit(num_train_up, num_train_up['labels'])
-print('Predicting...')
-predictions['RF Num'] = clf.predict(num_test)
-prob['RF Num'] = clf.predict_proba(num_test)
-toc(t)
+#
+## Random Forest on the categorical features
+#print('## Random Forest ##')
+#clf = RandomForestClassifier(max_depth=7, n_estimators=11, random_state=random_state)
+#t = tic()
+#print('Fitting...')
+#clf.fit(num_train_up.drop, num_train_up['labels'])
+#print('Predicting...')
+#predictions['RF Num'] = clf.predict(num_test)
+#prob['RF Num'] = clf.predict_proba(num_test)
+#toc(t)
 
 
 # SGD
@@ -592,7 +593,7 @@ print('## Random Forest ##')
 clf = RandomForestClassifier(max_depth=7, n_estimators=11, random_state=random_state)
 t = tic()
 print('Fitting...')
-clf.fit(num_train_up, num_train_up['labels'])
+clf.fit(num_train_up.drop(columns='labels'), num_train_up['labels'])
 print('Predicting...')
 predictions['RF Num'] = clf.predict(num_test)
 prob['RF Num'] = clf.predict_proba(num_test)
@@ -646,7 +647,7 @@ toc(t)
 
 
 # Vote by averaging probabilities
-probabilities = [prob['essay_1_norm'], prob['essay_2_norm']]
+probabilities = [prob['essay_1_norm'], prob['essay_1_norm'], prob['essay_2_norm']]
 avg_prob = np.mean(np.array(probabilities), axis=0)
 prob_approve = [x[1] for x in avg_prob]
 with open('prob_upsampled_essays.csv', 'w+') as f:
