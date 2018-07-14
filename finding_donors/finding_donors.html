@@ -12566,27 +12566,27 @@ It is a ratio of true positives(words classified as spam, and which are actually
 </div>
 <div class="inner_cell">
 <div class="text_cell_render border-box-sizing rendered_html">
-<p><strong>Answer:</strong></p>
+<p><strong>Answer: The reasons for selecting each of the models below are listed in the bullet points</strong></p>
 <p><strong>Support Vector Machines</strong></p>
 <ul>
-<li>SVMs are useful for classifying tokenized TF-IDF features derived from text.</li>
-<li>They are effective in highly dimensional domains, particularly where there is linear separability in the data.</li>
-<li>SVMs are slow when using large sample sizes, so they are typically used when samples sizes are under 100k.</li>
-<li>The sample size is only 36k so is well within SVMs capability. There are many features to be considered and SVM can handle the high dimensionality.</li>
+<li><strong>Real world:</strong> SVMs are useful for classifying tokenized TF-IDF features derived from text.</li>
+<li><strong>Strength:</strong> They are effective in highly dimensional domains, particularly where there is linear separability in the data.</li>
+<li><strong>Weakness:</strong> SVMs are slow when using large sample sizes, so they are typically used when samples sizes are under 100k.</li>
+<li><strong>Reason for this problem:</strong> The sample size is only 36k so is well within SVMs capability. There are many features to be considered and SVM can handle the high dimensionality.</li>
 </ul>
 <p><strong>Random Forest</strong></p>
 <ul>
-<li>Real world example, identifying fruit based on features such as color, size, shape.</li>
-<li>Any decision tree application can be enhanced by using RF, as an RF is multiple decision trees with different initial conditions allowing for a more robust prediction.</li>
-<li>The RF is susceptible to overfitting as it continues to split data completely. This needs to be addressed with pruning or limiting the number of split levels.</li>
-<li>RF is always a good classifier to include in initial analysis as it is simple to implement and easy to interpret.</li>
+<li><strong>Real world example:</strong> identifying fruit based on features such as color, size, shape.</li>
+<li><strong>Strength:</strong> Any decision tree application can be enhanced by using RF, as an RF is multiple decision trees with different initial conditions allowing for a more robust prediction.</li>
+<li><strong>Weakness:</strong> The RF is susceptible to overfitting as it continues to split data completely. This needs to be addressed with pruning or limiting the number of split levels.</li>
+<li><strong>Reason for this problem:</strong> RF is always a good classifier to include in initial analysis as it is simple to implement and easy to interpret.</li>
 </ul>
 <p><strong>K Nearest Neighbors</strong></p>
 <ul>
-<li>Real world example, identifying customer segments based on purchase data to improve business decisions.</li>
-<li>KNN groups similar data points, allowing for robust pattern identification within the dataset.</li>
-<li>If there is overlap in the data classification it is difficult/impossible for KNN to correctly classify points in the overlapped region.</li>
-<li>KNN is a standard and common classification method and is useful to include in initial analysis.</li>
+<li><strong>Real world example:</strong> identifying customer segments based on purchase data to improve business decisions.</li>
+<li><strong>Strength:</strong> KNN groups similar data points, allowing for robust pattern identification within the dataset.</li>
+<li><strong>Weakness:</strong> If there is overlap in the data classification it is difficult/impossible for KNN to correctly classify points in the overlapped region.</li>
+<li><strong>Reason for this problem:</strong> KNN is a standard and common classification method and is useful to include in initial analysis.</li>
 </ul>
 
 </div>
@@ -13225,13 +13225,34 @@ F-score on testing data: 0.6567
 </div>
 <div class="cell border-box-sizing code_cell rendered">
 <div class="input">
-<div class="prompt input_prompt">In&nbsp;[&nbsp;]:</div>
+<div class="prompt input_prompt">In&nbsp;[1]:</div>
 <div class="inner_cell">
     <div class="input_area">
 <div class=" highlight hl-ipython3"><pre><span></span><span class="o">!!</span>jupyter nbconvert *.ipynb
 </pre></div>
 
 </div>
+</div>
+</div>
+
+<div class="output_wrapper">
+<div class="output">
+
+
+<div class="output_area">
+
+<div class="prompt output_prompt">Out[1]:</div>
+
+
+
+
+<div class="output_text output_subarea output_execute_result">
+<pre>[&#39;[NbConvertApp] Converting notebook finding_donors.ipynb to html&#39;,
+ &#39;[NbConvertApp] Writing 473174 bytes to finding_donors.html&#39;]</pre>
+</div>
+
+</div>
+
 </div>
 </div>
 
